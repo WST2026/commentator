@@ -5,66 +5,67 @@ from bs4 import BeautifulSoup
 import pandas as pd
 import time
 
-# 크롬 드라이버 자동 설치 및 브라우저 실행
+# 브라우저 설정
 options = webdriver.ChromeOptions()
-options.add_argument('--headless')  # 브라우저 창 안 띄우기
+options.add_argument('--headless')  # 브라우저 창 띄우지 않음
 options.add_argument('--no-sandbox')
 options.add_argument('--disable-dev-shm-usage')
 
+# Selenium 드라이버 실행
 driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
 
-# FIFA 경기 일정 페이지로 이동
-url = 'https://www.fifa.com/fifaplus/en/tournaments/mens/worldcup/canadamexicousa2026/fixtures'
+# FIFA 월드컵 경기 일정 기사 URL
+url = 'https://www.fifa.com/en/tournaments/mens/worldcup/canadamexicousa2026/articles/match-schedule-fixtures-results-teams-stadiums'
 driver.get(url)
-time.sleep(5)  # JavaScript 렌더링 대기 (필요에 따라 조정)
-
-# 전체 페이지 로드가 끝날 때까지 스크롤 다운
-SCROLL_PAUSE = 2
-last_height = driver.execute_script("return document.body.scrollHeight")
-for _ in range(5):  # 충분히 내려줘야 전체 경기 로드됨
-    driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-    time.sleep(SCROLL_PAUSE)
-    new_height = driver.execute_script("return document.body.scrollHeight")
-    if new_height == last_height:
-        break
-    last_height = new_height
+time.sleep(5)  # 렌더링 대기
 
 # HTML 파싱
 soup = BeautifulSoup(driver.page_source, 'html.parser')
-with open("dumped_page.html", "w", encoding="utf-8") as f:
-    f.write(soup.prettify())
-
 driver.quit()
 
-# 경기 카드 전체 찾기
-match_cards = soup.find_all('a', class_='match-card-match-card')  # class는 실제 HTML 구조에 맞게 조정 필요
+# 결과 저장 리스트
+data = []
+current_date = ""
 
-# 결과 저장용 리스트
-matches = []
+# <h4>와 <p>를 순서대로 훑으면서 날짜-경기 쌍을 추출
+for elem in soup.find_all(['h4', 'p']):
+    if elem.name == 'h4':
+        strong_tag = elem.find('strong')
+        if strong_tag:
+            current_date = strong_tag.get_text(strip=True)
 
-for card in match_cards:
-    try:
-        date = card.find('span', class_='match-date').text.strip()
-        time_ = card.find('span', class_='match-time').text.strip()
-        teams = card.find_all('span', class_='match-teams-name')
-        team1 = teams[0].text.strip()
-        team2 = teams[1].text.strip()
-        stadium = card.find('span', class_='match-venue-name').text.strip()
-        city = card.find('span', class_='match-venue-city').text.strip()
+    elif elem.name == 'p' and 'rich-text_p__UfX5b' in elem.get('class', []):
+        lines = elem.get_text(separator="\n").split("\n")
+        for line in lines:
+            if line.strip().startswith("Match"):
+                try:
+                    # 하이픈 종류 정리: 하이픈, en-dash 등 통일
+                    clean_line = line.strip().replace(" - ", " – ").replace("–", " – ")
+                    parts = clean_line.split(" – ")
 
-        matches.append({
-            '날짜': date,
-            '시간': time_,
-            '팀1': team1,
-            '팀2': team2,
-            '경기장': stadium,
-            '도시': city
-        })
-    except Exception as e:
-        print(f"경기 카드 파싱 실패: {e}")
+                    if len(parts) >= 3:
+                        match_no = parts[0].replace("Match", "").strip()
+                        group = parts[1].strip()
+                        stadium = parts[2].strip()
+                    elif len(parts) == 2:
+                        match_no = parts[0].replace("Match", "").strip()
+                        group = parts[1].strip()
+                        stadium = ""
+                    else:
+                        continue  # 무시
 
-# CSV로 저장
-df = pd.DataFrame(matches)
-df.to_csv('fixtures.csv', index=False, encoding='utf-8-sig')
+                    data.append({
+                        "날짜": current_date,
+                        "매치번호": match_no,
+                        "조": group,
+                        "경기장": stadium
+                    })
+                except Exception as e:
+                    print("⚠️ 파싱 실패:", line, ">>", e)
 
-print(f"{len(df)}개의 경기 일정이 저장되었습니다.")
+# 결과 저장
+df = pd.DataFrame(data)
+df.to_csv("fixtures_fifa_articles.csv", index=False, encoding='utf-8-sig')
+
+print(f"✅ {len(df)}개 경기 저장 완료!")
+print(df.head())
