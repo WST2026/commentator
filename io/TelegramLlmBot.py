@@ -5,7 +5,7 @@ from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filte
 from transformers import pipeline
 
 # ---------------------- Bot & Model Settings ----------------------
-TOKEN = "PASTE_YOUR_TOKEN"
+TOKEN = "Token"
 CHAT_ID = -4883211398
 MODEL_NAME = "kakaocorp/kanana-1.5-2.1b-instruct-2505"
 
