@@ -1,0 +1,12 @@
+upload_mode: "all"             # "all" | "id" | "content" | "if_not_exists"
+# ids: ["abc123", "xyz789"]     # mode: "id" 일 때만 사용
+# contents: ["AI", "OpenAI"]    # mode: "content" 일 때만 사용
+index_name: "bing_articles"
+
+
+
+# 예시
+# upload_mode: "all"              # "all" | "id" | "content" | "if_not_exists"
+# ids: ["news001", "news002"]     # upload_mode가 "id"일 때만 사용
+# contents: ["AI"]                # "content" 모드일 때만 사용
+# index_name: "bing_articles"
