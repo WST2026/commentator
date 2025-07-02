@@ -1,7 +1,8 @@
 upload_mode: "all"             # "all" | "id" | "content" | "if_not_exists"
 # ids: ["abc123", "xyz789"]     # mode: "id" 일 때만 사용
 # contents: ["AI", "OpenAI"]    # mode: "content" 일 때만 사용
-index_name: "bing_articles"
+index_name: "bing_articles"     #고정
+id_strategy: sequential         #고정
 
 
 
