@@ -1,7 +1,7 @@
-python-telegram-bot>=20,<21
+opensearch-py
+sentence-transformers
+pyyaml
+python-telegram-bot
 transformers>=4,<5
 torch
 accelerate>=0.27
-opensearch-py
-pyyaml
-sentence-transformers

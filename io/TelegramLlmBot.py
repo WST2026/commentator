@@ -2,38 +2,15 @@ import asyncio
 import sys
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
-from transformers import pipeline
+import os
+from dotenv import load_dotenv
+sys.path.append(os.path.join(os.path.dirname(__file__), '../vectorDB'))
+from vector_search import search_by_vector
 
-# ---------------------- Bot & Model Settings ----------------------
-TOKEN = "Token"
+# ---------------------- 환경 변수 로드 ----------------------
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '../.env'))
+TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = -4883211398
-MODEL_NAME = "kakaocorp/kanana-1.5-2.1b-instruct-2505"
-
-# ---------------------- Load LLM Pipeline (once) ------------------
-print("[INIT] Loading model… (최초 1회, 수십 초~수 분 소요)")
-textgen = pipeline(
-    "text-generation",
-    model=MODEL_NAME,
-    device_map="auto",
-    torch_dtype="auto",
-    trust_remote_code=True,
-)
-print(" 시스템 작동!! 준비 완료!! ")
-
-# ---------------------- Helper ----------------------
-async def llm_reply(prompt: str) -> str:
-    loop = asyncio.get_running_loop()
-    result: str = await loop.run_in_executor(
-        None,
-        lambda: textgen(
-            prompt,
-            max_new_tokens=256,
-            do_sample=True,
-            temperature=0.7,
-            return_full_text=False,
-        )[0]["generated_text"].strip()
-    )
-    return result
 
 # ---------------------- Telegram Handler ----------------------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -45,22 +22,36 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_input = (update.message.text or "").strip()
         if not user_input:
             return
-        prompt = f"User: {user_input}\nAssistant:"
-        reply_text = await llm_reply(prompt)
+        # 벡터 유사도 검색 호출
+        results = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: search_by_vector(user_input, top_k=3)
+        )
+        # 결과 포맷팅
+        if results:
+            result_text = "\n\n".join([
+                f"[{i+1}] {doc['title']}\n{doc['content'][:200]}...\nURL: {doc['url']}"
+                for i, doc in enumerate(results)
+            ])
+        else:
+            result_text = "(유사한 문서를 찾지 못했습니다.)"
+        reply_text = f"[입력]\n{user_input}\n\n[유사 문서 Top 3]\n{result_text}"
         await context.bot.send_message(
             chat_id=CHAT_ID,
             text=reply_text,
             reply_to_message_id=update.message.message_id,
         )
-    except Exception:
+    except Exception as e:
         await context.bot.send_message(
             chat_id=CHAT_ID,
-            text="⚠️ LLM 응답 중 오류가 발생했습니다.",
+            text=f"⚠️ 벡터DB 응답 중 오류가 발생했습니다.\n{e}",
             reply_to_message_id=update.message.message_id,
         )
 
 # ---------------------- Main ----------------------
 def main() -> None:
+    if not TOKEN:
+        print("[ERROR] TELEGRAM_TOKEN 환경변수가 설정되어 있지 않습니다. .env 파일을 확인하세요.")
+        sys.exit(1)
     application = ApplicationBuilder().token(TOKEN).build()
     application.add_handler(
         MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message)
