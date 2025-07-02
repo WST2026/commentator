@@ -13,7 +13,7 @@ from vector_search import search_by_vector
 # ---------------------- 환경 변수 로드 ----------------------
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '../.env'))
 TOKEN = os.getenv("TELEGRAM_TOKEN")
-CHAT_ID = -4883211398
+# CHAT_ID = -4883211398  # 모든 채팅방 지원을 위해 제거
 
 # ---------------------- LLM 모델/토크나이저 로드 ----------------------
 MODEL_NAME = "kakaocorp/kanana-1.5-2.1b-instruct-2505"
@@ -50,10 +50,13 @@ def postprocess_llm_answer(answer, links, user_input=None):
 # ---------------------- Telegram Handler ----------------------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        if update.effective_chat.id != CHAT_ID:
-            return
-        if update.effective_user.is_bot:
-            return
+        # 모든 채팅방/유저의 메시지에 응답
+        chat_id = update.effective_chat.id
+        user_id = update.effective_user.id if update.effective_user else None
+        chat_type = update.effective_chat.type
+        user_name = update.effective_user.full_name if update.effective_user else "(알 수 없음)"
+        # 신규 채팅방/유저 로깅
+        print(f"[LOG] 채팅방ID: {chat_id}, 채팅방타입: {chat_type}, 유저ID: {user_id}, 유저명: {user_name}")
         user_input = (update.message.text or "").strip()
         if not user_input:
             return
@@ -64,7 +67,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # 검색 결과 없으면 바로 안내
         if not results or all(not doc['url'] for doc in results):
             await context.bot.send_message(
-                chat_id=CHAT_ID,
+                chat_id=chat_id,
                 text="관련 문서를 찾지 못했습니다.",
                 reply_to_message_id=update.message.message_id,
             )
@@ -90,13 +93,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         answer = tokenizer.decode(output_ids[0][input_ids.shape[1]:], skip_special_tokens=True).strip()
         answer = postprocess_llm_answer(answer, links, user_input)
         await context.bot.send_message(
-            chat_id=CHAT_ID,
+            chat_id=chat_id,
             text=answer,
             reply_to_message_id=update.message.message_id,
         )
     except Exception as e:
         await context.bot.send_message(
-            chat_id=CHAT_ID,
+            chat_id=update.effective_chat.id,
             text=f"⚠️ 답변 생성 중 오류가 발생했습니다.\n{e}",
             reply_to_message_id=update.message.message_id,
         )
