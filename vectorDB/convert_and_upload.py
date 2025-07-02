@@ -6,7 +6,6 @@ import yaml
 import argparse
 import hashlib
 from opensearchpy import OpenSearch, helpers
-from sentence_transformers import SentenceTransformer
 
 # 🔧 기본 설정
 CONFIG_PATH = "../config/upload_config.yaml"
@@ -15,9 +14,6 @@ BULK_JSONL = "bulk.jsonl"
 
 # 🔗 OpenSearch 클라이언트 연결
 client = OpenSearch("http://localhost:9200")
-
-# 🤖 임베딩 모델 로드
-embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
 
 # ⚙️ 설정 로드
 with open(CONFIG_PATH, "r", encoding="utf-8") as f:
@@ -204,44 +200,6 @@ def preview_documents(size=5, field=None, value=None):
             "datetime": source.get("datetime", "")
         }, indent=2, ensure_ascii=False))
 
-# ✅ 벡터 검색 (cosine similarity)
-def search_by_vector(query_text, top_k=5):
-    if not client.indices.exists(index=index_name):
-        print(f"❌ 인데그스 '{index_name}' 존재하지 않음")
-        return
-
-    embedding = embedding_model.encode(query_text).tolist()
-
-    script_query = {
-        "script_score": {
-            "query": {"match_all": {}},
-            "script": {
-                "source": "knn_score",
-                "lang": "knn",
-                "params": {
-                    "field": "embedding",
-                    "query_value": embedding,
-                    "space_type": "cosinesimil"
-                }
-            }
-        }
-    }
-
-    res = client.search(index=index_name, body={"size": top_k, "query": script_query})
-    hits = res["hits"]["hits"]
-
-    print(f"\n🔍 벡터 검색 결과 (Top {top_k})")
-    for i, hit in enumerate(hits, 1):
-        score = hit["_score"]
-        source = hit["_source"]
-        print(f"\n📄 Document {i} (Score: {score:.4f})")
-        print(json.dumps({
-            "title": source.get("title", ""),
-            "content": source.get("content", ""),
-            "url": source.get("url", ""),
-            "datetime": source.get("datetime", "")
-        }, indent=2, ensure_ascii=False))
-
 # ✅ 대화형 CLI
 def interactive_cli():
     print("\n무업을 하시겠습니까?")
@@ -271,10 +229,7 @@ def interactive_cli():
         value = input("검색어: ").strip()
         delete_documents(field=field, value=value)
     elif cmd == "5":
-        query_text = input("검색 문장 입력: ").strip()
-        top_k = input("보여줄 개수 (기본 5): ").strip()
-        top_k = int(top_k) if top_k.isdigit() else 5
-        search_by_vector(query_text, top_k=top_k)
+        print("(벡터 검색은 vector_search.py에서 import해서 사용하세요)")
     else:
         print("❌ 잘못된 입력입니다.")
 
@@ -285,13 +240,10 @@ if __name__ == "__main__":
         interactive_cli()
     else:
         parser = argparse.ArgumentParser()
-        parser.add_argument("command", choices=["upload", "check", "preview", "delete", "search"], help="실행 명령")
+        parser.add_argument("command", choices=["upload", "check", "preview", "delete"], help="실행 명령")
         parser.add_argument("--field", help="검색할 필드 (id, title, content)")
         parser.add_argument("--value", help="검색 키워드")
         parser.add_argument("--size", type=int, default=5, help="미리보기 개수 (기본: 5)")
-        parser.add_argument("--query", help="벡터 검색 문장")
-        parser.add_argument("--top_k", type=int, default=5, help="벡터 검색 결과 개수")
-
         args = parser.parse_args()
 
         if args.command == "upload":
@@ -304,6 +256,4 @@ if __name__ == "__main__":
         elif args.command == "preview":
             preview_documents(size=args.size, field=args.field, value=args.value)
         elif args.command == "delete":
-            delete_index()
-        elif args.command == "search":
-            search_by_vector(query_text=args.query, top_k=args.top_k)
+            delete_documents(field=args.field, value=args.value)
