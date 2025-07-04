@@ -1,7 +1,12 @@
 opensearch-py
 sentence-transformers
+scikit-learn
 pyyaml
+python-dotenv
 python-telegram-bot
 transformers>=4,<5
 torch
 accelerate>=0.27
+tqdm
+openai==0.28
+google-generativeai

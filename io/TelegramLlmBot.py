@@ -4,8 +4,7 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 import os
 from dotenv import load_dotenv
-from transformers import AutoModelForCausalLM, AutoTokenizer
-import torch
+import google.generativeai as genai
 import re
 sys.path.append(os.path.join(os.path.dirname(__file__), '../vectorDB'))
 from vector_search import search_by_vector
@@ -13,17 +12,14 @@ from vector_search import search_by_vector
 # ---------------------- 환경 변수 로드 ----------------------
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '../.env'))
 TOKEN = os.getenv("TELEGRAM_TOKEN")
-# CHAT_ID = -4883211398  # 모든 채팅방 지원을 위해 제거
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# ---------------------- LLM 모델/토크나이저 로드 ----------------------
-MODEL_NAME = "kakaocorp/kanana-1.5-2.1b-instruct-2505"
-device = "cuda" if torch.cuda.is_available() else "cpu"
-tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
-model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, device_map="auto", torch_dtype="auto", trust_remote_code=True)
+# ---------------------- Gemini 모델 설정 ----------------------
+genai.configure(api_key=GEMINI_API_KEY)
+model = genai.GenerativeModel('gemini-1.5-flash-latest')
 
 # ---------------------- 답변 후처리 함수 ----------------------
 def postprocess_llm_answer(answer, links, user_input=None):
-    # EOS/불필요한 반복/프롬프트 잔여물 자르기
     stop_patterns = [
         '\n[', '\n참고', '\n질문', '\n답변', '\nQ:', '\nA:', '\n---', '\n출처', '\nReference', '\n[참고', '\n[출처', '\n[질문', '\n[답변'
     ]
@@ -33,15 +29,14 @@ def postprocess_llm_answer(answer, links, user_input=None):
         if idx != -1 and idx < min_idx:
             min_idx = idx
     answer = answer[:min_idx].strip()
-    # 답변 내 URL 제거(출처는 마지막에만)
     url_pattern = r'https?://\S+'
     answer = re.sub(url_pattern, '', answer)
-    # 답변이 너무 짧거나, 질문의 키워드만 반복하거나, '없다'/'알 수 없다' 등 부정적 답변이면 안내
-    if not answer or len(answer) < 10 or (user_input and user_input.strip() in answer):
+    if not answer or len(answer.strip()) == 0:
         return "관련 문서에서 답을 찾지 못했습니다."
-    if any(x in answer for x in ["모르", "없", "알 수 없", "정보가 없습니다", "자료가 없습니다", "확인되지 않", "제공되지 않"]):
-        return "관련 문서에서 답을 찾지 못했습니다."
-    # 마지막에 [참고 링크] 한 번만 출력
+    negative_phrases = ["정보가 없습니다", "알 수 없습니다", "자료가 없습니다", "확인되지 않", "제공되지 않", "모르"]
+    # 답변이 부정적 문구만으로 이루어진 경우에는 참고 링크도 출력하지 않음
+    if answer.strip() in negative_phrases:
+        return "정보가 없습니다."
     links = [l for l in links if l]
     if links:
         answer = answer.strip() + '\n\n[참고 링크]\n' + '\n'.join(f"{i+1}. {l}" for i, l in enumerate(links))
@@ -50,54 +45,63 @@ def postprocess_llm_answer(answer, links, user_input=None):
 # ---------------------- Telegram Handler ----------------------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        # 모든 채팅방/유저의 메시지에 응답
         chat_id = update.effective_chat.id
         user_id = update.effective_user.id if update.effective_user else None
         chat_type = update.effective_chat.type
         user_name = update.effective_user.full_name if update.effective_user else "(알 수 없음)"
-        # 신규 채팅방/유저 로깅
         print(f"[LOG] 채팅방ID: {chat_id}, 채팅방타입: {chat_type}, 유저ID: {user_id}, 유저명: {user_name}")
         user_input = (update.message.text or "").strip()
         if not user_input:
             return
-        # 벡터 유사도 검색 호출
         results = await asyncio.get_running_loop().run_in_executor(
             None, lambda: search_by_vector(user_input, top_k=3)
         )
-        # 검색 결과 없으면 바로 안내
-        if not results or all(not doc['url'] for doc in results):
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text="관련 문서를 찾지 못했습니다.",
-                reply_to_message_id=update.message.message_id,
-            )
-            return
+        print("검색 결과:", results)
         # 참고 링크 프롬프트 생성
-        links = [doc['url'] for doc in results if doc['url']]
+        links = [doc['url'] for doc in results if doc.get('url')]
         context_text = "\n".join([
-            f"{i+1}. {doc['url']}" for i, doc in enumerate(results) if doc['url']
-        ])
-        prompt = f"다음은 참고 문서 링크와 사용자의 질문입니다. 아래 링크들을 참고해서 질문에 답변해 주세요.\n\n[참고 문서 링크]\n{context_text}\n\n[질문]\n{user_input}\n\n[답변]"
-        # LLM 증강 답변 생성 (generate 직접 사용)
-        input_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(model.device)
-        eos_token_id = tokenizer.eos_token_id
-        with torch.no_grad():
-            output_ids = model.generate(
-                input_ids,
-                max_new_tokens=512,
-                do_sample=True,
-                temperature=0.7,
-                eos_token_id=eos_token_id,
-                pad_token_id=tokenizer.pad_token_id if tokenizer.pad_token_id is not None else eos_token_id,
+            f"{i+1}. {doc['url']}" for i, doc in enumerate(results) if doc.get('url')
+        ]) if results else ""
+        # 검색 결과가 없으면 context_text 없이 질문만 LLM에 전달
+        if not results or all(not doc.get('url') for doc in results):
+            prompt = (
+                "아래 참고 문서에 정보가 없으면 '정보가 없습니다'라고 답하세요.\n"
+                f"[질문]\n{user_input}\n\n[답변]"
             )
-        answer = tokenizer.decode(output_ids[0][input_ids.shape[1]:], skip_special_tokens=True).strip()
+        else:
+            # 링크별로 제목+내용 일부+링크를 LLM에 전달
+            context_text = "\n".join([
+                f"{i+1}. 제목: {doc.get('title', '')}\n내용: {doc.get('content', '')[:200]}\n링크: {doc.get('url', '')}"
+                for i, doc in enumerate(results) if doc.get('url')
+            ])
+            prompt = (
+                "아래 참고 문서의 내용을 바탕으로 질문에 답변하세요. 문서에 정보가 없으면 '정보가 없습니다'라고 답하세요.\n\n"
+                f"[참고 문서]\n{context_text}\n\n[질문]\n{user_input}\n\n[답변]"
+            )
+        response = await asyncio.get_running_loop().run_in_executor(
+            None,
+            lambda: model.generate_content(
+                prompt,
+                generation_config={
+                    "temperature": 0.3,
+                    "max_output_tokens": 512,
+                }
+            )
+        )
+        answer = response.text.strip()
+        print("LLM 답변:", answer)
         answer = postprocess_llm_answer(answer, links, user_input)
+        # 텔레그램 메시지 길이 제한 적용
+        MAX_TELEGRAM_MSG_LEN = 4000
+        if len(answer) > MAX_TELEGRAM_MSG_LEN:
+            answer = answer[:MAX_TELEGRAM_MSG_LEN] + "\n\n(이하 생략)"
         await context.bot.send_message(
             chat_id=chat_id,
             text=answer,
             reply_to_message_id=update.message.message_id,
         )
     except Exception as e:
+        print("텔레그램 전송 오류:", e)
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
             text=f"⚠️ 답변 생성 중 오류가 발생했습니다.\n{e}",
