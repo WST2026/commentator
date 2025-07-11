@@ -12,8 +12,24 @@ CONFIG_PATH = "../config/upload_config.yaml"
 INPUT_JSON = "../data_collection/bing_articles_full.json"
 BULK_JSONL = "bulk.jsonl"
 
-# 🔗 OpenSearch 클라이언트 연결
-client = OpenSearch("http://localhost:9200")
+# 🔗 OpenSearch 클라이언트 연결 (인증 포함)
+client = OpenSearch(
+    hosts=[{"host": "localhost", "port": 9200}],
+    http_auth=("admin", "OpenSearch2024"),
+    use_ssl=False,
+    verify_certs=False,
+    ssl_show_warn=False
+)
+
+# 임베딩 모델 로드
+try:
+    from sentence_transformers import SentenceTransformer
+    embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+    print("✅ 임베딩 모델 로드 완료")
+except ImportError:
+    print("❌ sentence_transformers 패키지가 설치되지 않았습니다.")
+    print("pip install sentence-transformers")
+    sys.exit(1)
 
 # ⚙️ 설정 로드
 with open(CONFIG_PATH, "r", encoding="utf-8") as f:
